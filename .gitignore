@@ -59,3 +59,10 @@ ontology_config copy.json
 
 # pytest
 .pytest_cache/
+
+# Local ontology artifacts (generated)
+ontology-export*/
+taxi_v*/
+retail_v*/
+detected_config.json
+ontology_config.json

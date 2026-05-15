@@ -58,9 +58,9 @@ class Relationship:
       - ``from`` = many / FK side
       - ``to``   = one / PK side
 
-    Ontology convention:
-      - ``source`` = one / PK side  (= TMDL "to")
-      - ``target`` = many / FK side (= TMDL "from")
+    Ontology convention (this generator):
+      - ``source`` = many / FK side (= TMDL "from")  — subject of ``X_has_Y``
+      - ``target`` = one / PK side  (= TMDL "to")    — object of ``X_has_Y``
     """
 
     rel_id: str
