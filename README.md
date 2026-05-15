@@ -1,7 +1,6 @@
-# Fabric IQ Ontology Tools — Hackathon Guide
+# Fabric IQ Ontology Tools
 
 > **Comprehensive documentation for building, running, and extending the Fabric IQ Ontology CLI tool.**
-> Use this guide to get up and running quickly during the hackathon.
 
 ---
 
@@ -21,6 +20,7 @@
    - [create](#create)
    - [fix-decimals](#fix-decimals)
    - [generate-config](#generate-config)
+   - [diagnose-sm](#diagnose-sm)
 9. [End-to-End Walkthrough](#end-to-end-walkthrough)
 10. [Usage as a Python Library](#usage-as-a-python-library)
 11. [Ontology Config File](#ontology-config-file)
@@ -54,6 +54,7 @@
 | `fabric-iq create`          | Create an ontology from Semantic Model + Lakehouse               |
 | `fabric-iq fix-decimals`    | Cast decimal columns in lakehouse to double via PySpark notebook |
 | `fabric-iq generate-config` | Generate an ontology config JSON from a Semantic Model           |
+| `fabric-iq diagnose-sm`     | Predict whether the Fabric **UI** auto-generator would bind each table (Direct Lake required) |
 
 ---
 
@@ -184,7 +185,7 @@ python -m venv .venv
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# Install in editable mode (recommended for hackathon)
+# Install in editable mode (recommended)
 pip install -e .
 
 # Or install dependencies directly
@@ -262,7 +263,7 @@ The tool tries these authentication strategies in order:
 | 3        | Azure PowerShell              | `Connect-AzAccount`                                      |
 | 4        | DefaultAzureCredential        | Covers managed identity, VS Code, environment vars, etc. |
 
-**Recommended for hackathon:**
+**Recommended:**
 
 ```bash
 # Quickest way — log in via Azure CLI
@@ -502,9 +503,51 @@ fabric-iq generate-config -w $WORKSPACE_ID \
 
 ---
 
+### `diagnose-sm`
+
+Statically inspect a Semantic Model's TMDL and predict, **per table**, whether the Fabric portal's built-in *"Generate ontology from a semantic model"* feature would auto-create a `DataBinding` and `Contextualization` for that table.
+
+Per the [official docs](https://learn.microsoft.com/en-us/fabric/iq/ontology/concepts-generate#support-for-semantic-model-modes), the Fabric UI generator only auto-binds tables that are:
+
+1. In **Direct Lake** storage mode (Import / DirectQuery / Calculated tables are silently skipped),
+2. Backed by a lakehouse in a workspace with **inbound public access enabled**, and
+3. Have a single **primary key** identified (required for relationship contextualizations).
+
+It also flags column-level blockers: `Decimal`-typed columns (return null in Fabric Graph) and column names containing characters that auto-enable Delta column mapping (`, ; { } ( ) \n \t =` or space).
+
+> ⚠️ **Important.** This tool's own `fabric-iq create` is **not** subject to these UI restrictions. It builds DataBindings and Contextualizations directly against any lakehouse you pass with `-l`, regardless of SM storage mode. Use `diagnose-sm` to understand why the Fabric portal's auto-generator may be skipping tables, *not* to predict what `fabric-iq create` will produce.
+
+```bash
+fabric-iq diagnose-sm -w $WORKSPACE_ID -s $SEMANTIC_MODEL_ID
+```
+
+Example output:
+
+```
+Semantic-model auto-bind diagnosis (Fabric UI generator)
+==============================================================================
+  TABLE                        STORAGE      PK   FABRIC-UI VERDICT
+  ----------------------------------------------------------------------------
+  Date                         directLake   yes  OK
+  Geography                    directLake   yes  OK
+  Taxi_Trip                    directLake   no   BIND-ONLY (no PK → no contextualization)
+    - no single primary key detected (blocks contextualizations)
+  Weather                      directLake   no   BIND-ONLY (no PK → no contextualization)
+    - no single primary key detected (blocks contextualizations)
+  ----------------------------------------------------------------------------
+  Summary: 7/7 tables would auto-bind, 5/7 would auto-contextualize
+```
+
+| Option                      | Required | Description         |
+| --------------------------- | -------- | ------------------- |
+| `-w`, `--workspace-id`      | Yes      | Workspace GUID      |
+| `-s`, `--semantic-model-id` | Yes      | Semantic Model GUID |
+
+---
+
 ## End-to-End Walkthrough
 
-This is the **recommended hackathon workflow** from zero to a working ontology:
+This is the **recommended workflow** from zero to a working ontology:
 
 ### Step 1: Authenticate
 
@@ -564,7 +607,7 @@ Open `ontology_config.json` and verify:
 fabric-iq create -w $WORKSPACE_ID \
     -s $SEMANTIC_MODEL_ID \
     -l $LAKEHOUSE_ID \
-    --display-name "Hackathon_Ontology"
+    --display-name "My_Ontology"
 
 # Option B: With config overrides + decimal fix (recommended)
 fabric-iq create -w $WORKSPACE_ID \
@@ -573,7 +616,7 @@ fabric-iq create -w $WORKSPACE_ID \
     -c ontology_config.json \
     --fix-decimals \
     --verify-lakehouse \
-    --display-name "Hackathon_Ontology"
+    --display-name "My_Ontology"
 ```
 
 ### Step 5: Verify in Fabric Portal
@@ -776,7 +819,7 @@ Use `--save-config` to see what the heuristic detected, then pass it back via `-
 | ------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | **Decimal type not supported by Fabric Graph**                      | Queries return `null` for decimal columns         | Use `--fix-decimals` to auto-cast to double, or `--exclude-decimal` to remove them |
 | **Column names with special characters** (`,;{}()\n\t=` and spaces) | Breaks preview experience                         | Rename columns in lakehouse before creating ontology                               |
-| **Import mode Semantic Models**                                     | Data binding requires Direct Lake mode            | Use a Direct Lake SM only                                                          |
+| **Import mode Semantic Models**                                     | Fabric **UI** auto-generator silently skips data binding for Import / DirectQuery tables (per [docs](https://learn.microsoft.com/en-us/fabric/iq/ontology/concepts-generate#support-for-semantic-model-modes)) | Either re-author the SM in Direct Lake mode, **or** use `fabric-iq create` (this tool builds bindings directly against the lakehouse and is not subject to the UI restriction). Run `fabric-iq diagnose-sm` to see which tables the UI would skip. |
 | **OneLake security**                                                | Must be disabled on the lakehouse                 | Disable OneLake security before creating ontology                                  |
 | **Entity key types**                                                | `entityIdParts` only accepts `String` or `BigInt` | Other types (Double, DateTime) are auto-coerced to `String` with a warning         |
 | **LRO timeout**                                                     | Long operations time out after 300s by default    | Increase via `FabricClient(credential, max_wait_seconds=600)`                      |
@@ -797,6 +840,7 @@ fabric-iq-ontology-tools/
 │   ├── tmdl_parser.py           # Parse TMDL text → Table/Column/Relationship objects
 │   ├── definition_builder.py    # Build ontology JSON definition from parsed models
 │   ├── ontology_config.py       # Load/save/apply config file overrides
+│   ├── diagnose_sm.py           # Predict Fabric-UI auto-bind verdict per SM table
 │   ├── lakehouse_validator.py   # SQL endpoint queries to verify column types
 │   ├── notebook_runner.py       # Generate + run PySpark notebooks in Fabric
 │   ├── export_ontology.py       # Export: API → decode → save to folder

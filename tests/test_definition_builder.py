@@ -97,7 +97,11 @@ class TestBuildDataBinding:
 
 class TestBuildRelationshipType:
     def test_source_target_direction(self):
-        """Ontology source = PK/one side (toTable), target = FK/many side (fromTable)."""
+        """Ontology source = FK/many side (fromTable), target = PK/one side (toTable).
+
+        Keeps the relationship name ``{from}_has_{to}`` semantically aligned
+        with the edge direction (origin = subject = FK-holder).
+        """
         tables = {
             "Orders": Table(
                 name="Orders", schema="dbo",
@@ -113,8 +117,29 @@ class TestBuildRelationshipType:
         rel = Relationship("r1", from_table="Orders", from_col="CustomerID",
                            to_table="Customer", to_col="CustomerID")
         rid, payload = build_relationship_type(rel, tables)
-        assert payload["source"]["entityTypeId"] == "E2"  # Customer = PK/one
-        assert payload["target"]["entityTypeId"] == "E1"  # Orders = FK/many
+        assert payload["source"]["entityTypeId"] == "E1"  # Orders = FK/many = source
+        assert payload["target"]["entityTypeId"] == "E2"  # Customer = PK/one = target
+
+    def test_name_matches_source_entity(self):
+        """For name ``X_has_Y``, source MUST be entity X (subject))."""
+        tables = {
+            "Orders": Table(
+                name="Orders", schema="dbo",
+                columns=[Column("OrderID", "int64", "BigInt", ontology_id="200")],
+                entity_type_id="E_ORDERS",
+            ),
+            "Customer": Table(
+                name="Customer", schema="dbo",
+                columns=[Column("CustomerID", "int64", "BigInt", ontology_id="300")],
+                entity_type_id="E_CUSTOMER",
+            ),
+        }
+        rel = Relationship("r1", from_table="Orders", from_col="CustomerID",
+                           to_table="Customer", to_col="CustomerID")
+        _, payload = build_relationship_type(rel, tables)
+        subject_name, _, object_name = payload["name"].partition("_has_")
+        assert tables[subject_name].entity_type_id == payload["source"]["entityTypeId"]
+        assert tables[object_name].entity_type_id == payload["target"]["entityTypeId"]
 
 
 class TestBuildContextualization:
@@ -141,18 +166,19 @@ class TestBuildContextualization:
         assert result is not None
         ctx_id, payload = result
 
-        # dataBindingTable = from (many/FK) table
+        # dataBindingTable = from (many/FK) table = ontology source
         assert payload["dataBindingTable"]["sourceTableName"] == "Orders"
 
-        # sourceKeyRefBindings: FK col → source entity's entityIdParts prop
+        # sourceKeyRefBindings: ALL entityIdParts of source entity (Orders / FK)
+        # — direct columns on the binding table
         assert len(payload["sourceKeyRefBindings"]) == 1
-        assert payload["sourceKeyRefBindings"][0]["sourceColumnName"] == "CustomerID"
-        assert payload["sourceKeyRefBindings"][0]["targetPropertyId"] == "300"
+        assert payload["sourceKeyRefBindings"][0]["sourceColumnName"] == "OrderID"
+        assert payload["sourceKeyRefBindings"][0]["targetPropertyId"] == "200"
 
-        # targetKeyRefBindings: ONLY entityIdParts of target entity
+        # targetKeyRefBindings: FK col → target entity's PK property (Customer)
         assert len(payload["targetKeyRefBindings"]) == 1
-        assert payload["targetKeyRefBindings"][0]["sourceColumnName"] == "OrderID"
-        assert payload["targetKeyRefBindings"][0]["targetPropertyId"] == "200"
+        assert payload["targetKeyRefBindings"][0]["sourceColumnName"] == "CustomerID"
+        assert payload["targetKeyRefBindings"][0]["targetPropertyId"] == "300"
 
     def test_lakehouse_overrides(self):
         tables = self._tables()
@@ -171,11 +197,11 @@ class TestBuildContextualization:
         assert payload["dataBindingTable"]["sourceTableName"] == "orders_raw"
         assert payload["dataBindingTable"]["sourceSchema"] == "staging"
 
-        # sourceKeyRefBindings: FK col mapped
-        assert payload["sourceKeyRefBindings"][0]["sourceColumnName"] == "customer_id"
+        # sourceKeyRefBindings: source entity PK col (Orders.OrderID) mapped
+        assert payload["sourceKeyRefBindings"][0]["sourceColumnName"] == "order_id"
 
-        # targetKeyRefBindings: entity PK col mapped
-        assert payload["targetKeyRefBindings"][0]["sourceColumnName"] == "order_id"
+        # targetKeyRefBindings: FK col mapped (Orders.CustomerID → Customer.CustomerID)
+        assert payload["targetKeyRefBindings"][0]["sourceColumnName"] == "customer_id"
 
 
 class TestBuildDefinitionParts:

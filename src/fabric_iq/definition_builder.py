@@ -281,7 +281,12 @@ def build_relationship_type(
     """Build a RelationshipType definition.  Returns ``(reltype_id, payload_dict)``.
 
     In TMDL:    from = many/FK side,  to = one/PK side.
-    In Ontology: source = one/PK side, target = many/FK side.
+    In Ontology (this generator): source = many/FK side (= TMDL ``from``),
+    target = one/PK side (= TMDL ``to``).
+
+    This convention keeps the relationship name (``{from}_has_{to}``)
+    semantically aligned with the graph edge direction
+    (origin/source = subject = FK-holder).
     """
     reltype_id = new_unique_id()
     from_entity_id = tables[rel.from_table].entity_type_id  # many / FK
@@ -293,8 +298,8 @@ def build_relationship_type(
         "id": reltype_id,
         "name": f"{rel.from_table}_has_{rel.to_table}",
         "namespaceType": "Imported",
-        "source": {"entityTypeId": to_entity_id},  # one/PK = ontology source
-        "target": {"entityTypeId": from_entity_id},  # many/FK = ontology target
+        "source": {"entityTypeId": from_entity_id},  # many/FK = ontology source (subject)
+        "target": {"entityTypeId": to_entity_id},  # one/PK = ontology target (object)
     }
     return reltype_id, payload
 
@@ -325,17 +330,19 @@ def build_contextualization(
     column_mappings:
         SM column name → lakehouse column name for the from-table.
 
-    Rules (learned from working Taxi_Ontology export):
-      - ``dataBindingTable`` = the *from* table (many / FK side = ontology target)
-      - ``sourceKeyRefBindings``: FK column in binding table → source entity's
-        (to-table / PK side) entityIdParts property
-      - ``targetKeyRefBindings``: **ALL** entityIdParts columns of the target
-        entity (from-table / FK side)
+    Rules (aligned with ``source = from / FK`` convention in
+    :func:`build_relationship_type`):
+      - ``dataBindingTable`` = the *from* table (many / FK side = ontology source)
+      - ``sourceKeyRefBindings``: **ALL** entityIdParts columns of the source
+        entity (from-table / FK side) — direct columns on the binding table
+      - ``targetKeyRefBindings``: For each entityIdPart of the target entity
+        (to-table / PK side), the matching FK column in the binding table →
+        target entity's PK property
     """
     from_table = tables[rel.from_table]
     to_table = tables[rel.to_table]
 
-    # Source entity's PK property (the column named in toCol)
+    # Target entity's PK property (the column named in toCol)
     to_col_prop = next(
         (c for c in to_table.columns if c.name == rel.to_col),
         None,
@@ -352,10 +359,28 @@ def build_contextualization(
     col_map = column_mappings or {}
 
     # --- sourceKeyRefBindings ---
-    # Must bind ALL entityIdParts of the source entity (to-table / PK side).
-    # For each PK column in the source entity, find the matching FK column
+    # Bind ALL entityIdParts of the source entity (from-table / FK side).
+    # These columns live directly on the binding table, so the mapping is
+    # 1:1 (column name → its own ontology property id).
+    if entity_id_parts_map:
+        from_id_parts = set(entity_id_parts_map.get(rel.from_table, []))
+    else:
+        from_id_parts = {from_table.columns[0].ontology_id}
+
+    source_key_ref_bindings = [
+        {
+            "sourceColumnName": col_map.get(col.name, col.name),
+            "targetPropertyId": col.ontology_id,
+        }
+        for col in from_table.columns
+        if col.ontology_id in from_id_parts
+    ]
+
+    # --- targetKeyRefBindings ---
+    # Bind ALL entityIdParts of the target entity (to-table / PK side).
+    # For each PK column in the target entity, find the matching FK column
     # in the from-table (by name).  The explicit rel column is always included.
-    source_key_ref_bindings = []
+    target_key_ref_bindings = []
     if entity_id_parts_map:
         to_id_parts = set(entity_id_parts_map.get(rel.to_table, []))
     else:
@@ -373,31 +398,15 @@ def build_contextualization(
             fk_col_name = rel.from_col
         if fk_col_name is None:
             logger.warning(
-                "Cannot find FK column for source PK '%s' in table '%s' – "
+                "Cannot find FK column for target PK '%s' in table '%s' – "
                 "skipping contextualization for %s → %s",
                 pk_col.name, rel.from_table, rel.from_table, rel.to_table,
             )
             return None
-        source_key_ref_bindings.append({
+        target_key_ref_bindings.append({
             "sourceColumnName": col_map.get(fk_col_name, fk_col_name),
             "targetPropertyId": pk_id,
         })
-
-    # --- targetKeyRefBindings ---
-    # Map ALL entityIdParts of the target (from) entity
-    if entity_id_parts_map:
-        from_id_parts = set(entity_id_parts_map.get(rel.from_table, []))
-    else:
-        from_id_parts = {from_table.columns[0].ontology_id}
-
-    target_key_ref_bindings = [
-        {
-            "sourceColumnName": col_map.get(col.name, col.name),
-            "targetPropertyId": col.ontology_id,
-        }
-        for col in from_table.columns
-        if col.ontology_id in from_id_parts
-    ]
 
     payload = {
         "$schema": SCHEMA_CONTEXTUALIZATION,

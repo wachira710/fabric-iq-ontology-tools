@@ -19,6 +19,7 @@ from fabric_iq.api_client import FabricClient, FabricApiError
 from fabric_iq.export_ontology import export_ontology
 from fabric_iq.import_ontology import import_ontology
 from fabric_iq.create_ontology import create_ontology_from_semantic_model, generate_ontology_config
+from fabric_iq.diagnose_sm import diagnose_semantic_model
 from fabric_iq.notebook_runner import fix_decimal_columns
 from fabric_iq.models import RemapConfig
 
@@ -136,6 +137,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_genconf.add_argument("--source-schema", default="", help="Override source schema")
 
+    # ---- diagnose-sm ----
+    p_diag = sub.add_parser(
+        "diagnose-sm",
+        help="Predict whether the Fabric UI ontology generator would auto-bind each "
+             "table in a Semantic Model (Direct Lake required for auto-binding).",
+    )
+    p_diag.add_argument("-w", "--workspace-id", required=True)
+    p_diag.add_argument("-s", "--semantic-model-id", required=True)
+
     return parser
 
 
@@ -250,6 +260,13 @@ def main(argv: list[str] | None = None) -> int:
                 args.semantic_model_id,
                 args.output,
                 source_schema=args.source_schema,
+            )
+
+        elif args.command == "diagnose-sm":
+            diagnose_semantic_model(
+                client,
+                args.workspace_id,
+                args.semantic_model_id,
             )
 
     except FabricApiError as exc:
